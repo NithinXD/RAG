@@ -859,7 +859,7 @@ def process_message(user_id, message):
     if "pricing" in intents or "service_info" in intents:
         # Initialize agno agent for service information
         try:
-            db_url = f"postgresql+psycopg://{os.getenv('1user')}:{os.getenv('1password')}@{os.getenv('1host')}:{os.getenv('1port')}/{os.getenv('1dbname')}"
+            db_url = f"postgresql+psycopg://{os.getenv('user1')}:{os.getenv('password1')}@{os.getenv('host1')}:{os.getenv('port1')}/{os.getenv('dbname1')}"
 
             # Create Agno agent with Gemini 1.5 Pro and SQL tools
             sql_tools = SQLTools(db_url=db_url)
@@ -1056,7 +1056,7 @@ def handle_booking_with_agno(user_id, message, intents, service_entities, date_e
     """
     try:
         # Create database connection string
-        db_url = f"postgresql+psycopg://{os.getenv('1user')}:{os.getenv('1password')}@{os.getenv('1host')}:{os.getenv('1port')}/{os.getenv('1dbname')}"
+        db_url = f"postgresql+psycopg://{os.getenv('user1')}:{os.getenv('password1')}@{os.getenv('host1')}:{os.getenv('port1')}/{os.getenv('dbname1')}"
 
         # Create SQL tools for Agno
         sql_tools = SQLTools(db_url=db_url)
