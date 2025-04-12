@@ -5,10 +5,10 @@ User ID: system
 Source: gemini_gemini-1.5-pro-002
 
 USER QUERY:
-You are a helpful assistant for Tranquility Spa & Wellness Center. Use the following information to answer the user's question.
+You are a helpful assistant for Red Trends Spa & Wellness Center. Use the following information to answer the user's question.
 
 BUSINESS INFORMATION:
-Business Name: Tranquility Spa & Wellness Center
+Business Name: Red Trends Spa & Wellness Center
 Description: A premium spa offering massage therapy, facials, body treatments, and wellness services.
 
 Services:
@@ -16,7 +16,7 @@ I'm sorry, but I couldn't retrieve the service information at this moment. Pleas
 
 RECENT CONVERSATION HISTORY:
 User: my name is nithin
-Assistant: It's a pleasure to meet you, Nithin.  How can I help you today regarding Tranquility Spa & Wellness Center?
+Assistant: It's a pleasure to meet you, Nithin.  How can I help you today regarding Red Trends Spa & Wellness Center?
 
 User: services
 Assistant: I'm so sorry, I'm still having trouble accessing our detailed service menu. I know that's frustrating, Nithin!

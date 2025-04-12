@@ -18,7 +18,7 @@ load_dotenv()
 def get_grok_agent(instructions=None):
     """Create an Agno agent with Grok."""
     default_instructions = (
-        "You are a helpful assistant for Tranquility Spa & Wellness Center. "
+        "You are a helpful assistant for Red Trends Spa & Wellness Center. "
         "Provide accurate and friendly information about spa services, hours, and bookings. "
         "Keep responses concise and professional."
     )
@@ -42,7 +42,7 @@ def get_grok_agent(instructions=None):
 # SPA BUSINESS INFORMATION
 # ----------------------------------------------------------------------
 SPA_INFO = {
-    "name": "Tranquility Spa & Wellness Center",
+    "name": "Red Trends Spa & Wellness Center",
     "hours": {
         "Monday": "9:00 AM - 8:00 PM",
         "Tuesday": "9:00 AM - 8:00 PM",

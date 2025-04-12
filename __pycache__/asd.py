@@ -173,7 +173,7 @@ def get_agno_agent(instructions=None, tools=None, model_name=None):
         Agent: Configured Agno agent
     """
     default_instructions = dedent("""
-        You are a helpful assistant for Tranquility Spa & Wellness Center.
+        You are a helpful assistant for Red Trends Spa & Wellness Center.
         Provide accurate and helpful information about spa services, bookings, and policies.
         Be friendly, professional, and concise in your responses.
     """)
@@ -248,7 +248,7 @@ def get_agno_agent_with_retry(instructions=None, tools=None, model_name=None):
     raise last_error
 # Spa service business information
 SPA_BUSINESS = {
-    "name": "Tranquility Spa & Wellness Center",
+    "name": "Red Trends Spa & Wellness Center",
     "description": "A premium spa offering massage therapy, facials, body treatments, and wellness services.",
     "hours": {
         "Monday": "9:00 AM - 8:00 PM",
@@ -264,8 +264,8 @@ SPA_BUSINESS = {
     "cancellation_policy": "Cancellations must be made at least 24 hours before your appointment to avoid a 50% cancellation fee. No-shows will be charged the full service amount.",
     "contact": {
         "phone": "(555) 123-4567",
-        "email": "appointments@tranquilityspa.com",
-        "website": "www.tranquilityspa.com",
+        "email": "appointments@Red Trendsspa.com",
+        "website": "www.Red Trendsspa.com",
         "address": "123 Serenity Lane, Relaxville, CA 94123"
     }
 }
@@ -754,7 +754,7 @@ def process_message(user_id, message):
         preferences = get_user_preferences(user_id)
         semantic_memories = recall_semantic_memory(user_id, "user identity", top_k=1)
         
-        response_text = f"You’re user {user_id} at Tranquility Spa & Wellness Center! "
+        response_text = f"You’re user {user_id} at Red Trends Spa & Wellness Center! "
         if preferences:
             response_text += "I know you prefer: " + ", ".join([f"{k}: {v}" for k, v in preferences.items()]) + ". "
         if semantic_memories:
@@ -864,7 +864,7 @@ def process_message(user_id, message):
             # Create Agno agent with Gemini 1.5 Pro and SQL tools
             sql_tools = SQLTools(db_url=db_url)
             agent_instructions = dedent("""
-                You are a spa service information specialist for Tranquility Spa & Wellness Center.
+                You are a spa service information specialist for Red Trends Spa & Wellness Center.
                 Provide detailed and accurate information about our services, including prices, durations, and descriptions.
                 Format the information in a clear, easy-to-read manner.
                 If specific services are requested, focus on providing details about those services.
@@ -914,7 +914,7 @@ def process_message(user_id, message):
         business_info += f"\nCancellation Policy: {SPA_BUSINESS['cancellation_policy']}\n"
 
     # Combine all context
-    context = "You are a helpful assistant for Tranquility Spa & Wellness Center. Use the following information to answer the user's question.\n\n"
+    context = "You are a helpful assistant for Red Trends Spa & Wellness Center. Use the following information to answer the user's question.\n\n"
     context += f"BUSINESS INFORMATION:\n{business_info}\n\n"
     if preference_context:
         context += f"USER PREFERENCES:\n{preference_context}\n\n"
@@ -1063,7 +1063,7 @@ def handle_booking_with_agno(user_id, message, intents, service_entities, date_e
 
         # Create booking agent with specific instructions
         booking_instructions = dedent("""
-            You are a booking assistant for Tranquility Spa & Wellness Center.
+            You are a booking assistant for Red Trends Spa & Wellness Center.
 
             IMPORTANT BOOKING RULES:
             1. Bookings must be made at least 4 hours in advance
@@ -1201,7 +1201,7 @@ def handle_booking_query_with_agno(user_id, message, query_type="all", customer_
 
         # Create booking query agent with specific instructions
         booking_query_instructions = dedent("""
-            You are a booking assistant for Tranquility Spa & Wellness Center.
+            You are a booking assistant for Red Trends Spa & Wellness Center.
             Your task is to help users query their bookings and provide detailed information.
 
             DATABASE SCHEMA (EXACT NAMES - DO NOT MODIFY):
@@ -1480,7 +1480,7 @@ def process_message(user_id, message):
 # Chat interface with improved context handling
 def chat():
     user_id = input("Enter your user ID: ").strip()
-    print(f"Tranquility Spa Assistant: Welcome to Tranquility Spa & Wellness Center, {user_id}! How can I help you today?")
+    print(f"Red Trends Spa Assistant: Welcome to Red Trends Spa & Wellness Center, {user_id}! How can I help you today?")
 
     while True:
         try:
@@ -1490,11 +1490,11 @@ def chat():
             break
 
         if message.lower() in ["exit", "quit", "bye"]:
-            print("Tranquility Spa Assistant: Thank you for chatting with us. Have a relaxing day!")
+            print("Red Trends Spa Assistant: Thank you for chatting with us. Have a relaxing day!")
             break
 
         response = process_message(user_id, message)
-        print("Tranquility Spa Assistant:", response)
+        print("Red Trends Spa Assistant:", response)
 
 # Handle general queries with Agno
 def handle_general_query_with_agno(user_id, message):
@@ -1520,7 +1520,7 @@ def handle_general_query_with_agno(user_id, message):
 
         # Create general query agent with specific instructions
         general_query_instructions = dedent("""
-            You are an assistant for Tranquility Spa & Wellness Center.
+            You are an assistant for Red Trends Spa & Wellness Center.
             Your task is to help users with their questions about spa services and related topics.
 
             IMPORTANT INSTRUCTIONS:

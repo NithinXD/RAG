@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Tranquility Spa & Wellness Center API",
-    description="API for the Tranquility Spa & Wellness Center chatbot and booking system",
+    title="Red Trends Spa & Wellness Center API",
+    description="API for the Red Trends Spa & Wellness Center chatbot and booking system",
     version="1.0.0"
 )
 

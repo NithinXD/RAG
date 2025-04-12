@@ -1,6 +1,6 @@
-# Tranquility Spa & Wellness Center AI Agent
+# Red Trends Spa & Wellness Center AI Agent
 
-This project implements an AI chatbot agent for Tranquility Spa & Wellness Center using Agno and Gemini. The agent provides customer support, answers questions about services, and handles bookings.
+This project implements an AI chatbot agent for Red Trends Spa & Wellness Center using Agno and Gemini. The agent provides customer support, answers questions about services, and handles bookings.
 
 ## Features
 
