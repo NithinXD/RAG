@@ -1,0 +1,7 @@
+Recieved Gemini api key
+Recieved pinecone api key
+Creating new Index - llama-text-embed-v2
+            https://test-iasghj9.svc.aped-4627-b74a.pinecone.io
+
+emb.py with code for using embedding-001 for getting embedding
+pine_client.py for connecting to the Index

@@ -1,0 +1,10 @@
+Service ID,Service Name,Description,Duration (mins),Price (INR),Category
+1,Deep Tissue Massage,Targets deeper layers of muscle,60,3000,Massage
+2,Aromatherapy Massage,Massage using essential oils for relaxation,45,2200,Massage
+3,Glowing Facial,Customized facial for glowing skin,50,1800,Facial
+4,Classic Manicure,Hand and nail care treatment,30,900,Nail Care
+5,Pedicure Delight,Foot and toenail grooming service,40,1000,Nail Care
+6,Body Polish,Exfoliating treatment for smooth skin,45,2000,Body Treatment
+7,Hot Stone Massage,Massage using heated stones,60,3200,Massage
+8,Nourishing Hair Spa,Nourishing hair treatment for strength,45,1500,Hair Care
+9,Couple’s Retreat Package,A shared spa experience for two,90,6000,Spa Package

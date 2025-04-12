@@ -1,0 +1,12 @@
+
+=== AGNO AGENT RESPONSE LOG ===
+Timestamp: 2025-04-07 17:49:45
+User ID: system
+Source: db_query_agno
+
+USER QUERY:
+Execute this SQL query and return the results: SELECT "Service ID", "Service Name", "Description", "Price (INR)", "Category" FROM public.services
+
+AGENT RESPONSE:
+None
+===============================

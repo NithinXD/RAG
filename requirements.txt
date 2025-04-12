@@ -1,0 +1,39 @@
+# FastAPI for the REST API framework
+fastapi==0.111.1
+
+# Uvicorn as the ASGI server to run FastAPI
+uvicorn==0.22.0
+
+# Pydantic for data validation (used internally by FastAPI)
+pydantic==2.7.1
+
+# python-dotenv loads environment variables from a .env file
+python-dotenv==1.0.1
+
+# Requests for making HTTP requests to external APIs
+requests==2.32.2
+
+# Google Generative AI client for interfacing with Gemini models
+google-generativeai==0.8.4
+
+# NumPy for numerical operations, such as vector calculations
+numpy==1.26.4
+
+# Agno framework for creating conversational agents
+agno==1.2.8
+
+# Pinecone client for managing your vector database
+pinecone==3.0.0
+
+google-genai==1.9.0
+
+SQLAlchemy==2.0.29
+
+# PostgreSQL connector (binary version to avoid compilation issues)
+psycopg==3.2.6
+
+# PostgreSQL connector (v3 binary)
+psycopg[binary]==3.2.6
+
+# PostgreSQL connector (v2 binary) - required by app.py
+psycopg2-binary==2.9.9

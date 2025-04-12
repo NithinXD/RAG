@@ -1,0 +1,11 @@
+Booking ID,Customer Name,Service ID,Booking Date,Time Slot (HH:MM),Duration (mins),Price (INR)
+1,Aarav Mehta,1,2025-04-06,10:00,60,3000
+2,Diya Sharma,3,2025-04-06,11:30,50,1800
+3,Vedant Iyer,7,2025-04-07,15:00,60,3200
+4,Saanvi Rao,4,2025-04-07,12:00,30,900
+5,Ishaan Kapoor,6,2025-04-08,14:30,45,2000
+6,Meera Pillai,2,2025-04-08,10:30,45,2200
+7,Reyansh Nair,9,2025-04-09,17:00,90,6000
+8,Tanvi Reddy,5,2025-04-09,13:00,40,1000
+9,Arjun Desai,8,2025-04-10,11:00,45,1500
+10,Kritika Singh,1,2025-04-10,16:00,60,3000
