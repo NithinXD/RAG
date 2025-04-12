@@ -869,7 +869,7 @@ def process_message(user_id, message):
 
                 EXAMPLE CORRECT SQL QUERIES:
                 - SELECT * FROM public.services WHERE "Service Name" = 'Glowing Facial'
-                - SELECT * FROM public.services WHERE "Category" = 'Facial'
+                - SELECT * FROM public.services WHERE "Category" = 'Facial' 
             """)
             # Create agent and query for services
             agent = None
