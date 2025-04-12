@@ -1440,7 +1440,7 @@ def handle_booking_query_with_agno(user_id, message, query_type="all", customer_
             You are a booking assistant for Red Trends Spa & Wellness Center.
             Your job is to analyze the user's natural language request and craft an SQL query that uses
             any required date filters while ensuring that results are filtered using the user id as the
-            "Customer Name" column.
+            "Customer Name" column and DO NOT RETURN EXACT COLUMN NAMES.
 
             DATABASE SCHEMA (DO NOT MODIFY):
             - Table: public.services
@@ -1499,6 +1499,7 @@ def handle_booking_query_with_agno(user_id, message, query_type="all", customer_
                - Listing each booking with Service Name, Booking Date, Time Slot (HH:MM), and Price (INR).
             3. If the query is for future bookings, include a reminder about the cancellation policy.
             4. If the query is for previous bookings, ask if the user would like to rebook the same service.
+            5. DO NOT USE EXACT NAMES OF COLUMNS GIVE GENERIC NAMES LIKE TIME : AND PRICE OR RATE :
         """)
 
         # Create the agent with a key rotation mechanism
@@ -2039,14 +2040,250 @@ def classify_message_type(message):
         # Default to standard_flow if we encounter an error
         return "standard_flow"
 
-# Handle context-dependent queries with Agno using user's conversation history
-def handle_context_dependent_query(user_id, message):
+# Get ranked conversation history from latest to oldest
+def get_ranked_conversation_history(user_id, limit=10, format_as_text=True):
     """
-    Handle context-dependent queries using Agno agent with the user's conversation history
+    Get the user's conversation history ranked from latest to oldest
     
     Args:
         user_id (str): User ID
-        message (str): User message
+        limit (int): Maximum number of history items to retrieve
+        format_as_text (bool): Whether to format the history as text
+        
+    Returns:
+        If format_as_text is True: 
+            str: Formatted conversation history text
+        If format_as_text is False:
+            list: Sorted list of conversation history items
+    """
+    try:
+        # Get the user's conversation history from Pinecone
+        conversation_history = get_conversation_history(user_id, limit=limit)
+        
+        if not conversation_history:
+            if format_as_text:
+                return ""
+            return []
+        
+        # Sort by timestamp in descending order (most recent first)
+        sorted_history = sorted(
+            conversation_history, 
+            key=lambda x: x.get('metadata', {}).get('timestamp', 0), 
+            reverse=True
+        )
+        
+        if not format_as_text:
+            return sorted_history
+        
+        # Format the history as a conversation text
+        context_history = ""
+        for item in sorted_history:
+            metadata = item.get('metadata', {})
+            user_msg = metadata.get('message', '')
+            bot_msg = metadata.get('response', '')
+            
+            if user_msg and bot_msg:
+                # Add the interaction to our context history
+                context_history += f"User: {user_msg}\nAssistant: {bot_msg}\n\n"
+        
+        logger.info(f"Retrieved and ranked {len(conversation_history)} conversation history items")
+        return context_history
+    
+    except Exception as e:
+        logger.error(f"Error in get_ranked_conversation_history: {str(e)}")
+        if format_as_text:
+            return ""
+        return []
+
+# Select the most relevant conversation history using Gemini
+def select_relevant_history(user_id, current_message, history_items, max_items=5):
+    """
+    Use Gemini to select the most relevant conversation history items for the current message
+    
+    Args:
+        user_id (str): User ID
+        current_message (str): Current user message/question
+        history_items (list): List of conversation history items
+        max_items (int): Maximum number of relevant items to select
+        
+    Returns:
+        list: Selected relevant history items
+    """
+    try:
+        if not history_items:
+            return []
+        
+        # For very short messages (likely follow-ups), always include the most recent message
+        # This helps with context retention for short follow-up questions
+        is_short_followup = len(current_message.split()) <= 5
+        
+        # Check for pronouns that indicate a follow-up
+        has_pronouns = any(pronoun in current_message.lower() for pronoun in ['it', 'this', 'that', 'they', 'them', 'these', 'those'])
+        
+        # If it's a very short message that might be a follow-up, always include the most recent item
+        if is_short_followup and history_items:
+            # For short messages with pronouns, prioritize the most recent conversation even more
+            if has_pronouns and len(history_items) >= 2:
+                # Include the two most recent items to ensure we capture the context
+                most_recent = history_items[:2]
+                logger.info(f"Prioritizing the two most recent conversations for follow-up with pronouns: '{current_message}'")
+                # If there are only two items, just return them
+                if len(history_items) == 2:
+                    return most_recent
+                # Otherwise, we'll still do relevance ranking for the rest
+                remaining_items = history_items[2:]
+            else:
+                most_recent = [history_items[0]]
+                # If there's only one item, just return it
+                if len(history_items) == 1:
+                    return most_recent
+                # Otherwise, we'll still do relevance ranking for the rest
+                remaining_items = history_items[1:]
+        else:
+            most_recent = []
+            remaining_items = history_items
+        
+        # If there are no remaining items to rank, just return the most recent
+        if not remaining_items:
+            return most_recent
+            
+        # Get a Gemini model for relevance ranking
+        gemini_model = get_gemini_model(GEMINI_MODELS[0])
+        
+        # Create a prompt for Gemini to rank the relevance of each history item
+        ranking_prompt = dedent(f"""
+            Your task is to analyze a user's current message and select the most relevant previous 
+            conversation items that provide context for answering their question.
+            
+            Current message: "{current_message}"
+            
+            Previous conversation items (from newest to oldest):
+            
+        """)
+        
+        # Add each history item to the prompt
+        for i, item in enumerate(remaining_items):
+            metadata = item.get('metadata', {})
+            user_msg = metadata.get('message', '')
+            bot_msg = metadata.get('response', '')
+            
+            if user_msg and bot_msg:
+                ranking_prompt += f"ITEM {i+1}:\nUser: {user_msg}\nAssistant: {bot_msg}\n\n"
+        
+        ranking_prompt += dedent("""
+            For each conversation item, rate its relevance to the current message on a scale of 1-10,
+            where 10 is extremely relevant and 1 is not relevant at all.
+            
+            IMPORTANT: Pay special attention to items that might contain information about:
+            1. Services or products the user has previously asked about
+            2. Preferences the user has mentioned
+            3. Questions that the current message might be following up on
+            4. Any entities (names, services, etc.) that might be referenced by pronouns in the current message
+            
+            Return your answer as a JSON object with item numbers as keys and relevance scores as values.
+            Example: {"1": 8, "2": 3, "3": 9, "4": 2, "5": 7}
+            
+            Only include the JSON object in your response, nothing else.
+        """)
+        
+        # Get relevance scores from Gemini
+        max_retries = 3
+        for retry in range(max_retries):
+            try:
+                response = gemini_model.generate_content(ranking_prompt)
+                response_text = response.text
+                
+                # Extract JSON from response
+                try:
+                    # Try to parse the response as JSON directly
+                    relevance_scores = json.loads(response_text)
+                except json.JSONDecodeError:
+                    # If direct parsing fails, try to extract JSON from text
+                    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if match:
+                        relevance_scores = json.loads(match.group(0))
+                    else:
+                        raise ValueError("Could not extract JSON from Gemini response")
+                
+                # Convert scores to numeric values and create (item_index, score) pairs
+                scored_items = []
+                for item_num, score in relevance_scores.items():
+                    try:
+                        item_idx = int(item_num) - 1  # Convert to 0-based index
+                        if 0 <= item_idx < len(remaining_items):
+                            # For short follow-ups, boost scores for items that mention services/products
+                            if is_short_followup:
+                                metadata = remaining_items[item_idx].get('metadata', {})
+                                combined_text = (metadata.get('message', '') + ' ' + 
+                                                metadata.get('response', '')).lower()
+                                
+                                # Boost score if the item mentions services or contains specific keywords
+                                if ('service' in combined_text or 'facial' in combined_text or 
+                                    'massage' in combined_text or 'treatment' in combined_text or
+                                    'spa' in combined_text or 'price' in combined_text):
+                                    score = float(score) * 1.5  # Boost by 50%
+                            
+                            scored_items.append((item_idx, float(score)))
+                    except (ValueError, IndexError):
+                        continue
+                
+                # Sort by score in descending order
+                scored_items.sort(key=lambda x: x[1], reverse=True)
+                
+                # Select top items from the ranked list
+                selected_items = []
+                for item_idx, score in scored_items[:max_items - len(most_recent)]:
+                    selected_items.append(remaining_items[item_idx])
+                
+                # Combine with the most recent item if it was a short follow-up
+                final_selection = most_recent + selected_items
+                
+                logger.info(f"Selected {len(final_selection)} most relevant history items out of {len(history_items)}")
+                return final_selection
+                
+            except Exception as e:
+                logger.error(f"Error selecting relevant history (attempt {retry+1}): {str(e)}")
+                if retry < max_retries - 1:
+                    # Rotate to next key/model and try again
+                    rotate_gemini_key_and_model()
+                    gemini_model = get_gemini_model()
+                    continue
+        
+        # If all retries failed, return the most recent items as fallback
+        logger.warning("Failed to select relevant history items, using most recent as fallback")
+        
+        # For short follow-ups with pronouns, prioritize the most recent items even more
+        if is_short_followup and has_pronouns and len(history_items) > 1:
+            # For definite follow-ups, include the two most recent items with higher weight
+            if len(history_items) >= 2:
+                logger.info("Fallback: Prioritizing the two most recent conversations for follow-up with pronouns")
+                return history_items[:2] + history_items[2:min(max_items-1, len(history_items))]
+            else:
+                return history_items[:max_items]
+        # For regular short follow-ups, prioritize the most recent item plus a few more
+        elif is_short_followup and len(history_items) > 1:
+            # Always include the most recent item for short follow-ups
+            return [history_items[0]] + history_items[1:min(max_items, len(history_items))]
+        else:
+            # Otherwise just return the most recent items
+            return history_items[:max_items]
+        
+    except Exception as e:
+        logger.error(f"Error in select_relevant_history: {str(e)}")
+        # Return the most recent items as fallback
+        return history_items[:min(max_items, len(history_items))]
+
+# Answer questions using context-aware approach with Gemini and Agno
+def answer_with_smart_context(user_id, message, custom_instructions=None, additional_tools=None, model_name=None):
+    """
+    Answer questions using smart context selection with Gemini and Agno
+    
+    Args:
+        user_id (str): User ID
+        message (str): User message/question
+        custom_instructions (str): Optional custom instructions for the agent
+        additional_tools (list): Optional additional tools for the agent
+        model_name (str): Optional specific Gemini model to use
         
     Returns:
         str: Response message from Agno agent
@@ -2058,47 +2295,75 @@ def handle_context_dependent_query(user_id, message):
         # Create SQL tools for Agno
         sql_tools = SQLTools(db_url=db_url)
         
-        # Get the user's conversation history from Pinecone, prioritizing recent interactions
-        # Get more history for context-dependent queries (up to 10 recent interactions)
-        conversation_history = get_conversation_history(user_id, limit=10)
+        # Get the user's conversation history ranked from latest to oldest
+        history_items = get_ranked_conversation_history(user_id, limit=15, format_as_text=False)
         
-        # Format the conversation history for context
+        # If no history, handle as a new conversation
+        if not history_items:
+            logger.info("No conversation history found, handling as new conversation")
+            return handle_general_query_with_agno(user_id, message)
+        
+        # Check if this is a short follow-up question
+        is_short_followup = len(message.split()) <= 5
+        
+        # For very short messages with pronouns, they're almost certainly follow-ups
+        has_pronouns = any(pronoun in message.lower() for pronoun in ['it', 'this', 'that', 'they', 'them', 'these', 'those'])
+        is_definite_followup = is_short_followup and has_pronouns
+        
+        # Use Gemini to select the most relevant history items
+        # For short follow-ups, we'll get more context items to ensure we don't miss anything
+        max_items = 7 if is_short_followup else 5
+        
+        # Get relevant history items
+        relevant_items = select_relevant_history(user_id, message, history_items, max_items=max_items)
+        
+        # For definite follow-ups, log that we detected it
+        if is_definite_followup and history_items:
+            logger.info(f"Detected definite follow-up question with pronouns: '{message}'")
+        
+        # Extract potential entities from the conversation history
+        entities = extract_entities_from_history(relevant_items)
+        
+        # Format the selected history items as context
         context_history = ""
-        if conversation_history:
-            # Sort by timestamp in descending order (most recent first)
-            sorted_history = sorted(
-                conversation_history, 
-                key=lambda x: x.get('metadata', {}).get('timestamp', 0), 
-                reverse=True
-            )
+        for item in relevant_items:
+            metadata = item.get('metadata', {})
+            user_msg = metadata.get('message', '')
+            bot_msg = metadata.get('response', '')
             
-            # Format the history as a conversation
-            for i, item in enumerate(sorted_history):
-                metadata = item.get('metadata', {})
-                user_msg = metadata.get('message', '')
-                bot_msg = metadata.get('response', '')
-                
-                if user_msg and bot_msg:
-                    # Add the interaction to our context history
-                    context_history += f"User: {user_msg}\nAssistant: {bot_msg}\n\n"
+            if user_msg and bot_msg:
+                context_history += f"User: {user_msg}\nAssistant: {bot_msg}\n\n"
         
-        logger.info(f"Retrieved {len(conversation_history)} conversation history items for context")
+        logger.info(f"Using {len(relevant_items)} relevant conversation history items as context")
         
         # Create tools list
         tools = [sql_tools]
+        if additional_tools:
+            tools.extend(additional_tools)
         
-        # Create context-dependent query agent with specific instructions
-        context_query_instructions = dedent(f"""
+        # Create default context-dependent query instructions if not provided
+        default_instructions = dedent(f"""
             You are an assistant for Red Trends Spa & Wellness Center.
             Your task is to help users with their questions, maintaining context from previous conversations.
             
             IMPORTANT INSTRUCTIONS:
-            1. Use the conversation history provided to understand context
+            1. The conversation history provided has been SPECIFICALLY SELECTED as the most relevant to the user's current question
             2. When the user refers to something mentioned earlier, use the history to determine what they're referring to
             3. ALWAYS check the database for information about spa services, prices, etc.
             4. For service-related questions, query the services table
             5. For booking-related questions, direct the user to make a booking
             6. Be conversational and maintain continuity with previous interactions
+            
+            CONTEXT HANDLING GUIDELINES:
+            1. For short messages like "can i do it after detan" or "what about this one", ALWAYS identify what "it" or "this one" refers to
+            2. If the user mentions a pronoun (it, this, that, they, etc.), determine what it refers to from the conversation history
+            3. If the user's message is very short (1-5 words), it's likely a follow-up to a previous question
+            4. When in doubt about what a user is referring to, use the most recently discussed service or topic
+            5. IMPORTANT: For follow-up questions, ALWAYS check the MOST RECENT conversation first
+            6. If a user asks about doing something "after X" (workout, detan, etc.), they're referring to a service mentioned recently
+            
+            ENTITIES MENTIONED IN CONVERSATION HISTORY:
+            {entities}
             
             DATABASE SCHEMA (EXACT NAMES - DO NOT MODIFY):
             - Table name: public.services
@@ -2127,19 +2392,64 @@ def handle_context_dependent_query(user_id, message):
             4. If suggesting a service, mention how the user can book it
             5. Maintain continuity with previous conversations
             
-            CONVERSATION HISTORY:
+            MOST RELEVANT CONVERSATION HISTORY:
             {context_history}
         """)
         
+        # Use custom instructions if provided, otherwise use default
+        context_query_instructions = custom_instructions if custom_instructions else default_instructions
+        
         # Create the Agno agent with key rotation on failure
         try:
-            context_agent = get_agno_agent_with_retry(instructions=context_query_instructions, tools=tools)
+            context_agent = get_agno_agent_with_retry(
+                instructions=context_query_instructions, 
+                tools=tools,
+                model_name=model_name
+            )
         except Exception as e:
             logger.error(f"Failed to create context-dependent agent after retries: {str(e)}")
             return "I'm sorry, but I'm having trouble accessing our system right now. Could you please try again with a more specific question?"
         
         # Prepare the prompt for the context agent
-        context_prompt = f"User's current message: {message}\n\nPlease respond to this message using the conversation history for context."
+        # For short follow-ups, explicitly ask the agent to identify what the user is referring to
+        if is_short_followup:
+            # Even more explicit instructions for definite follow-ups with pronouns
+            if is_definite_followup:
+                context_prompt = dedent(f"""
+                    User's current message: "{message}"
+                    
+                    IMPORTANT: This is a short follow-up question with pronouns. The user is almost certainly referring to something mentioned in the MOST RECENT message exchange.
+                    
+                    Before answering:
+                    1. FIRST, identify what specific service, treatment, or topic the pronoun(s) in the user's message refer to
+                       - For example, if they say "can i do it after a workout", "it" ALWAYS refers to a service mentioned in the MOST RECENT conversation
+                       - ALWAYS check the MOST RECENT message exchange FIRST - this is critical
+                    
+                    2. EXPLICITLY state what you understand the user is referring to at the beginning of your response
+                       - Example: "Regarding the Deep Tissue Massage you just asked about, yes you can..."
+                    
+                    3. If the user's previous message mentioned a specific service, THAT is what they're referring to now
+                    
+                    4. NEVER assume they're referring to a service from earlier in the conversation if a more recent service was mentioned
+                    
+                    5. Provide a complete answer that clearly addresses their question about the identified service/topic
+                    
+                    Please respond to this message using the MOST RELEVANT conversation history for context.
+                """)
+            else:
+                context_prompt = dedent(f"""
+                    User's current message: "{message}"
+                    
+                    This appears to be a short follow-up question. Before answering:
+                    1. Identify what specific service, treatment, or topic the user is referring to
+                    2. Check the conversation history to understand the context
+                    3. If the user uses pronouns like "it", "this", or "that", determine what they refer to
+                    4. Provide a complete answer that clearly states what you understand the user is asking about
+                    
+                    Please respond to this message using the MOST RELEVANT conversation history for context.
+                """)
+        else:
+            context_prompt = f"User's current message: {message}\n\nPlease respond to this message using the MOST RELEVANT conversation history for context."
         
         # Get response from Agno agent with retry
         max_retries = min(2, len(gemini_api_keys))
@@ -2149,7 +2459,11 @@ def handle_context_dependent_query(user_id, message):
                 if retry > 0:
                     logger.info(f"Retrying context agent with new API key (attempt {retry+1})")
                     rotate_gemini_key()
-                    context_agent = get_agno_agent(instructions=context_query_instructions, tools=tools)
+                    context_agent = get_agno_agent(
+                        instructions=context_query_instructions, 
+                        tools=tools,
+                        model_name=model_name
+                    )
                 
                 # Try to get a response
                 response = context_agent.run(context_prompt)
@@ -2158,20 +2472,134 @@ def handle_context_dependent_query(user_id, message):
                 store_memory(user_id, message, response.content, MEMORY_TYPES["INTERACTION"])
                 
                 return response.content
-                
-            except Exception as inner_e:
-                logger.error(f"Error getting response from context agent (attempt {retry+1}/{max_retries}): {str(inner_e)}")
+            except Exception as e:
+                logger.error(f"Error getting response from context agent (attempt {retry+1}): {str(e)}")
                 if retry < max_retries - 1:
-                    # Will retry with a new key
                     continue
                 else:
-                    # All retries failed
-                    logger.error("All context agent attempts failed.")
-                    return "I'm sorry, but I'm having trouble understanding the context of your question. Could you please provide more details or ask in a different way?"
-    
+                    # All retries failed, try a fallback approach
+                    return handle_general_query_with_agno(user_id, message)
     except Exception as e:
-        logger.error(f"Error handling context-dependent query: {str(e)}")
-        return "I'm sorry, but I encountered an error processing your request. Please try again with more specific details."
+        logger.error(f"Error in answer_with_smart_context: {str(e)}")
+        # Fall back to general query handler
+        return handle_general_query_with_agno(user_id, message)
+
+# Extract entities (services, treatments, etc.) from conversation history
+def extract_entities_from_history(history_items):
+    """
+    Extract potential entities (services, treatments, etc.) from conversation history
+    
+    Args:
+        history_items (list): List of conversation history items
+        
+    Returns:
+        str: Formatted string of extracted entities
+    """
+    try:
+        if not history_items:
+            return "No entities found in conversation history."
+            
+        # Keywords to look for in the conversation
+        service_keywords = [
+            "facial", "massage", "treatment", "therapy", "service", "package", 
+            "spa", "body", "scrub", "wrap", "manicure", "pedicure", "hair", 
+            "makeup", "exfoliation", "detan", "glowing"
+        ]
+        
+        # Extract potential service names and other entities
+        entities = set()
+        
+        # Special handling for the most recent item - it's likely the most relevant
+        if history_items:
+            most_recent = history_items[0]
+            metadata = most_recent.get('metadata', {})
+            recent_user_msg = metadata.get('message', '').lower()
+            recent_bot_msg = metadata.get('response', '').lower()
+            
+            # Prioritize entities from the most recent message
+            recent_entities = extract_entities_from_text(recent_user_msg + " " + recent_bot_msg, service_keywords)
+            entities.update(recent_entities)
+            
+            # If we found entities in the most recent message, mark them as such
+            if recent_entities:
+                entities.add("MOST_RECENT: " + ", ".join(recent_entities))
+        
+        # Process all history items
+        for item in history_items:
+            metadata = item.get('metadata', {})
+            user_msg = metadata.get('message', '').lower()
+            bot_msg = metadata.get('response', '').lower()
+            
+            combined_text = user_msg + " " + bot_msg
+            found_entities = extract_entities_from_text(combined_text, service_keywords)
+            entities.update(found_entities)
+        
+        # Format the entities
+        if entities:
+            # Sort entities but put the MOST_RECENT ones at the top
+            sorted_entities = sorted([e for e in entities if not e.startswith("MOST_RECENT:")])
+            most_recent_entities = [e for e in entities if e.startswith("MOST_RECENT:")]
+            
+            all_entities = most_recent_entities + sorted_entities
+            entity_list = "- " + "\n- ".join(all_entities)
+            
+            return f"The following entities have been mentioned in the conversation:\n{entity_list}"
+        else:
+            return "No specific entities identified in the conversation history."
+            
+    except Exception as e:
+        logger.error(f"Error extracting entities from history: {str(e)}")
+        return "Error extracting entities from conversation history."
+
+# Helper function to extract entities from text
+def extract_entities_from_text(text, keywords):
+    """
+    Extract entities from text based on keywords
+    
+    Args:
+        text (str): Text to extract entities from
+        keywords (list): List of keywords to look for
+        
+    Returns:
+        set: Set of extracted entities
+    """
+    entities = set()
+    
+    # Look for service names in the text
+    for keyword in keywords:
+        if keyword in text:
+            # Try to extract the full service name
+            # Look for patterns like "X facial", "Y massage", etc.
+            patterns = [
+                rf'([a-z\s]+{keyword})',  # e.g., "glowing facial"
+                rf'({keyword}[a-z\s]+)',  # e.g., "facial treatment"
+                rf'"([^"]*{keyword}[^"]*)"'  # Anything in quotes containing the keyword
+            ]
+            
+            for pattern in patterns:
+                matches = re.findall(pattern, text)
+                for match in matches:
+                    # Clean up the match
+                    clean_match = match.strip()
+                    if 3 <= len(clean_match) <= 30:  # Reasonable length for a service name
+                        entities.add(clean_match)
+    
+    return entities
+
+# Handle context-dependent queries with Agno using user's conversation history
+def handle_context_dependent_query(user_id, message):
+    """
+    Handle context-dependent queries using Agno agent with the user's conversation history
+    
+    Args:
+        user_id (str): User ID
+        message (str): User message
+        
+    Returns:
+        str: Response message from Agno agent
+    """
+    # Use the new smart context selection approach
+    return answer_with_smart_context(user_id, message)
 
 # Process user message
 def process_message(user_id, message):
