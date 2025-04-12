@@ -869,7 +869,7 @@ def process_message(user_id, message):
 
                 EXAMPLE CORRECT SQL QUERIES:
                 - SELECT * FROM public.services WHERE "Service Name" = 'Glowing Facial'
-                - SELECT * FROM public.services WHERE "Category" = 'Facial' 
+                - SELECT * FROM public.services WHERE "Category" = 'Facial'
             """)
             # Create agent and query for services
             agent = None
@@ -1934,6 +1934,245 @@ def analyze_message(message):
 
     return results
 
+# Classify message type using Agno and Gemini
+def classify_message_type(message):
+    """
+    Classify a message as either "standard_flow" or "context_dependent" using Gemini with Agno
+    
+    Standard flow: booking retrieval, create booking, service info, web search
+    Context dependent: messages like "who am I", "what service were we talking about", etc.
+
+    Args:
+        message (str): User message to classify
+
+    Returns:
+        str: Classification result - either "standard_flow" or "context_dependent"
+    """
+    try:
+        # Create instructions for the classification agent
+        classification_instructions = dedent("""
+            You are a message classification assistant for Red Trends Spa & Wellness Center.
+            Your task is to analyze user messages and classify them into one of two categories:
+            
+            1. "standard_flow" - Messages that are about:
+               - booking retrieval (checking existing bookings)
+               - create booking (making new appointments)
+               - service info (asking about spa services, prices, etc.)
+               - web search (general questions about spa treatments, wellness, etc.)
+               
+            2. "context_dependent" - Messages that require previous conversation context to understand, such as:
+               - "Who am I?" (asking about user identity)
+               - "What service were we talking about just now?" (referring to previous conversation)
+               - "What's the price of that item we were just talking about?" (referring to previous context)
+               - "Can you tell me more about it?" (where "it" refers to something mentioned earlier)
+               - "Is that available tomorrow?" (where "that" refers to something mentioned earlier)
+               - Any message with pronouns like "it", "that", "this", "those" without clear referents
+               - Any message that seems incomplete without previous context
+            
+            CLASSIFICATION GUIDELINES:
+            - "standard_flow" includes: direct questions about services, explicit booking requests, 
+              clear inquiries about spa information that don't reference previous conversation.
+              
+            - "context_dependent" includes: questions with pronouns that lack clear referents,
+              requests for clarification about previous topics, questions that seem incomplete
+              without knowing what was discussed before.
+              
+            RESPONSE FORMAT:
+            Respond with ONLY ONE of these two values:
+            - "standard_flow"
+            - "context_dependent"
+            
+            Do not include any other text, explanation, or formatting in your response.
+        """)
+        
+        # Create the Agno agent with key rotation on failure
+        try:
+            classification_agent = get_agno_agent_with_retry(instructions=classification_instructions)
+        except Exception as e:
+            logger.error(f"Failed to create classification agent after retries: {str(e)}")
+            # Default to standard_flow if we can't classify
+            return "standard_flow"
+        
+        # Prepare the prompt for the classification agent
+        classification_prompt = f"Classify this message as either 'standard_flow' or 'context_dependent': '{message}'"
+        
+        # Get response from Agno agent with retry
+        max_retries = min(2, len(gemini_api_keys))
+        for retry in range(max_retries):
+            try:
+                # If this is a retry, get a new agent with a fresh API key
+                if retry > 0:
+                    logger.info(f"Retrying classification agent with new API key (attempt {retry+1})")
+                    rotate_gemini_key()
+                    classification_agent = get_agno_agent(instructions=classification_instructions)
+                
+                # Try to get a response
+                response = classification_agent.run(classification_prompt)
+                agent_response = response.content.strip().lower()
+                
+                # Make sure we have a valid response
+                if agent_response is None:
+                    raise ValueError("Agno agent returned None response")
+                
+                # Normalize the response to ensure it's one of our expected values
+                if "context_dependent" in agent_response:
+                    return "context_dependent"
+                elif "standard_flow" in agent_response:
+                    return "standard_flow"
+                else:
+                    # If the response doesn't clearly match either category, default to standard_flow
+                    logger.warning(f"Unclear classification response: {agent_response}. Defaulting to standard_flow.")
+                    return "standard_flow"
+                
+            except Exception as inner_e:
+                logger.error(f"Error getting response from classification agent (attempt {retry+1}/{max_retries}): {str(inner_e)}")
+                if retry < max_retries - 1:
+                    # Will retry with a new key
+                    continue
+                else:
+                    # All retries failed, default to standard_flow
+                    logger.error("All classification attempts failed. Defaulting to standard_flow.")
+                    return "standard_flow"
+    
+    except Exception as e:
+        logger.error(f"Error classifying message type: {str(e)}")
+        # Default to standard_flow if we encounter an error
+        return "standard_flow"
+
+# Handle context-dependent queries with Agno using user's conversation history
+def handle_context_dependent_query(user_id, message):
+    """
+    Handle context-dependent queries using Agno agent with the user's conversation history
+    
+    Args:
+        user_id (str): User ID
+        message (str): User message
+        
+    Returns:
+        str: Response message from Agno agent
+    """
+    try:
+        # Create database connection string for SQL tools
+        db_url = f"postgresql+psycopg://{os.getenv('user')}:{os.getenv('password')}@{os.getenv('host')}:{os.getenv('port')}/{os.getenv('dbname')}"
+        
+        # Create SQL tools for Agno
+        sql_tools = SQLTools(db_url=db_url)
+        
+        # Get the user's conversation history from Pinecone, prioritizing recent interactions
+        # Get more history for context-dependent queries (up to 10 recent interactions)
+        conversation_history = get_conversation_history(user_id, limit=10)
+        
+        # Format the conversation history for context
+        context_history = ""
+        if conversation_history:
+            # Sort by timestamp in descending order (most recent first)
+            sorted_history = sorted(
+                conversation_history, 
+                key=lambda x: x.get('metadata', {}).get('timestamp', 0), 
+                reverse=True
+            )
+            
+            # Format the history as a conversation
+            for i, item in enumerate(sorted_history):
+                metadata = item.get('metadata', {})
+                user_msg = metadata.get('message', '')
+                bot_msg = metadata.get('response', '')
+                
+                if user_msg and bot_msg:
+                    # Add the interaction to our context history
+                    context_history += f"User: {user_msg}\nAssistant: {bot_msg}\n\n"
+        
+        logger.info(f"Retrieved {len(conversation_history)} conversation history items for context")
+        
+        # Create tools list
+        tools = [sql_tools]
+        
+        # Create context-dependent query agent with specific instructions
+        context_query_instructions = dedent(f"""
+            You are an assistant for Red Trends Spa & Wellness Center.
+            Your task is to help users with their questions, maintaining context from previous conversations.
+            
+            IMPORTANT INSTRUCTIONS:
+            1. Use the conversation history provided to understand context
+            2. When the user refers to something mentioned earlier, use the history to determine what they're referring to
+            3. ALWAYS check the database for information about spa services, prices, etc.
+            4. For service-related questions, query the services table
+            5. For booking-related questions, direct the user to make a booking
+            6. Be conversational and maintain continuity with previous interactions
+            
+            DATABASE SCHEMA (EXACT NAMES - DO NOT MODIFY):
+            - Table name: public.services
+              Columns: "Service ID", "Service Name", "Description", "Price (INR)", "Category"
+              Note: Column names include spaces and must be quoted in SQL queries
+            
+            - Table name: public.bookings
+              Columns: "Booking ID", "Customer Name", "Service ID", "Booking Date", "Time Slot (HH:MM)", "Price (INR)"
+              Note: The "Customer Name" column contains the user ID of the customer
+            
+            EXAMPLE SQL QUERIES:
+            - To find information about a specific service:
+              ```sql
+              SELECT * FROM public.services WHERE "Service Name" ILIKE '%facial%'
+              ```
+            
+            - To get all services in a category:
+              ```sql
+              SELECT * FROM public.services WHERE "Category" ILIKE '%massage%'
+              ```
+            
+            RESPONSE GUIDELINES:
+            1. For service questions, provide details about the service, price, and description
+            2. For general spa questions, provide helpful information based on the database
+            3. Always be professional, friendly, and concise
+            4. If suggesting a service, mention how the user can book it
+            5. Maintain continuity with previous conversations
+            
+            CONVERSATION HISTORY:
+            {context_history}
+        """)
+        
+        # Create the Agno agent with key rotation on failure
+        try:
+            context_agent = get_agno_agent_with_retry(instructions=context_query_instructions, tools=tools)
+        except Exception as e:
+            logger.error(f"Failed to create context-dependent agent after retries: {str(e)}")
+            return "I'm sorry, but I'm having trouble accessing our system right now. Could you please try again with a more specific question?"
+        
+        # Prepare the prompt for the context agent
+        context_prompt = f"User's current message: {message}\n\nPlease respond to this message using the conversation history for context."
+        
+        # Get response from Agno agent with retry
+        max_retries = min(2, len(gemini_api_keys))
+        for retry in range(max_retries):
+            try:
+                # If this is a retry, get a new agent with a fresh API key
+                if retry > 0:
+                    logger.info(f"Retrying context agent with new API key (attempt {retry+1})")
+                    rotate_gemini_key()
+                    context_agent = get_agno_agent(instructions=context_query_instructions, tools=tools)
+                
+                # Try to get a response
+                response = context_agent.run(context_prompt)
+                
+                # Store the interaction in memory
+                store_memory(user_id, message, response.content, MEMORY_TYPES["INTERACTION"])
+                
+                return response.content
+                
+            except Exception as inner_e:
+                logger.error(f"Error getting response from context agent (attempt {retry+1}/{max_retries}): {str(inner_e)}")
+                if retry < max_retries - 1:
+                    # Will retry with a new key
+                    continue
+                else:
+                    # All retries failed
+                    logger.error("All context agent attempts failed.")
+                    return "I'm sorry, but I'm having trouble understanding the context of your question. Could you please provide more details or ask in a different way?"
+    
+    except Exception as e:
+        logger.error(f"Error handling context-dependent query: {str(e)}")
+        return "I'm sorry, but I encountered an error processing your request. Please try again with more specific details."
+
 # Process user message
 def process_message(user_id, message):
     """
@@ -1947,6 +2186,16 @@ def process_message(user_id, message):
         str: Response message
     """
     try:
+        # First, classify the message type
+        message_type = classify_message_type(message)
+        logger.info(f"Message classified as: {message_type}")
+        
+        # For context-dependent messages, use the user's conversation history
+        if message_type == "context_dependent":
+            logger.info("Handling as context-dependent query with conversation history")
+            return handle_context_dependent_query(user_id, message)
+        
+        # For standard flow messages, proceed with the existing logic
         # Analyze the message for intents and entities
         analysis = analyze_message(message)
         intents = analysis.get("intents", [])
