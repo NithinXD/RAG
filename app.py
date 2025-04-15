@@ -34,7 +34,7 @@ def get_gemini_api_keys():
         keys.append(primary_key)
 
     # Get additional keys that might be in the .env file
-    for i in range(1, 10):  # Check for up to 10 additional keys
+    for i in range(1, 10): 
         key = os.getenv(f"GEMINI_API_KEY_{i}")
         if key:
             keys.append(key)
@@ -53,7 +53,7 @@ def get_gemini_api_keys():
                 if line.startswith("AIza") and len(line) > 30 and "=" not in line:
                     if line not in keys:
                         keys.append(line)
-                # Also check for keys in format GOOGLE_API_KEY=AIza...
+                # check for keys in format GOOGLE_API_KEY=AIza...
                 elif "=" in line and "API_KEY" in line:
                     parts = line.split("=", 1)
                     if len(parts) == 2 and parts[1].startswith("AIza") and len(parts[1]) > 30:
@@ -86,7 +86,7 @@ current_model_index = 0
 def get_gemini_model(model_name=None):
     global current_key_index, current_model_index, gemini_api_keys
 
-    # If we've tried all keys, start over
+    # over after trying all keys
     if current_key_index >= len(gemini_api_keys):
         current_key_index = 0
         logger.warning("All Gemini API keys have been tried and failed. Starting over.")
@@ -105,15 +105,12 @@ def get_gemini_model(model_name=None):
     # Otherwise use the current model from rotation
     model_to_use = GEMINI_MODELS[current_model_index]
     logger.info(f"Using Gemini model: {model_to_use}")
-
-    # Create and return the model
     return genai.GenerativeModel(model_to_use)
 
 # Function to rotate to the next key when one fails
 def rotate_gemini_key():
     global current_key_index
 
-    # Move to the next key
     current_key_index += 1
     logger.info(f"Rotating to next Gemini API key (index: {current_key_index})")
 
@@ -235,8 +232,6 @@ def get_agno_agent_with_retry(instructions=None, tools=None, model_name=None):
             # Create the agent with the current key and model
             agent = get_agno_agent(instructions, tools, model_name)
 
-            # Don't test the agent - it might use up quota unnecessarily
-            # Just return it and let it be used when needed
             return agent
         except Exception as e:
             last_error = e
@@ -244,30 +239,24 @@ def get_agno_agent_with_retry(instructions=None, tools=None, model_name=None):
             if retry < max_retries - 1:
                 logger.info(f"Retrying with next Gemini API key or model")
 
-    # If we get here, all retries failed
     logger.error(f"All attempts to create Agno agent failed: {str(last_error)}")
     raise last_error
+
 # Spa service business information
 SPA_BUSINESS = {
     "name": "Red Trends Spa & Wellness Center",
     "description": "A premium spa offering massage therapy, facials, body treatments, and wellness services.",
     "hours": {
-        "Monday": "9:00 AM - 8:00 PM",
-        "Tuesday": "9:00 AM - 8:00 PM",
-        "Wednesday": "9:00 AM - 8:00 PM",
-        "Thursday": "9:00 AM - 8:00 PM",
-        "Friday": "9:00 AM - 9:00 PM",
-        "Saturday": "8:00 AM - 9:00 PM",
-        "Sunday": "10:00 AM - 6:00 PM"
+        "Monday to Sumday": "9:00 AM - 7:00 PM"
     },
     "services": [],
     "booking_policy": "Appointments must be booked at least 4 hours in advance. We recommend booking 2-3 days ahead for weekend appointments.",
     "cancellation_policy": "Cancellations must be made at least 24 hours before your appointment to avoid a 50% cancellation fee. No-shows will be charged the full service amount.",
     "contact": {
-        "phone": "(555) 123-4567",
+        "phone": "+91 8838745128",
         "email": "appointments@Red Trendsspa.com",
         "website": "www.Red Trendsspa.com",
-        "address": "123 Serenity Lane, Relaxville, CA 94123"
+        "address": "1965 Relaxville, Madurai, Tamil Nadu 625017"
     }
 }
 
@@ -291,7 +280,6 @@ def get_db_connection():
         )
         #print("Connection successful!")
 
-        # Create a cursor to execute SQL queries
         cursor = connection.cursor()
 
         # Example query
@@ -321,10 +309,8 @@ def get_services_from_db():
         )
         #print("Connection successful!")
 
-        # Create a cursor to execute SQL queries
         cursor = connection.cursor()
 
-        # Use the exact column names from the schema
         query = """
         SELECT "Service ID", "Service Name", "Description", "Price (INR)", "Category"
         FROM public.services;
@@ -380,9 +366,8 @@ def store_memory(user_id, message, response, memory_type=MEMORY_TYPES["INTERACTI
         "type": memory_type
     }
 
-    # Add any additional metadata
     if additional_metadata:
-        # Ensure all metadata values are valid types for Pinecone
+ 
         sanitized_metadata = {}
         for key, value in additional_metadata.items():
             if value is None:
@@ -398,9 +383,8 @@ def store_memory(user_id, message, response, memory_type=MEMORY_TYPES["INTERACTI
         (memory_id, vector, metadata)
     ])
 
-    # If this is a FAQ, also store it separately
+   
     if memory_type == MEMORY_TYPES["FAQ"]:
-        # Extract the question part from the message
         question = extract_question(message)
         if question:
             faq_vector = get_embedding(question)
@@ -417,7 +401,6 @@ def store_memory(user_id, message, response, memory_type=MEMORY_TYPES["INTERACTI
 
 def extract_question(text):
     """Extract a question from text if present"""
-    # Simple pattern matching for questions
     question_patterns = [
         r'(?:^|\s)(?:what|how|when|where|why|who|can|could|would|will|is|are|do|does|did|should)(?:\s+\w+){2,}[?]',
         r'(?:^|\s)(?:tell me about|explain|describe)(?:\s+\w+){2,}[?]?',
@@ -435,7 +418,6 @@ def extract_question(text):
 def recall_semantic_memory(user_id, query, top_k=3, memory_types=None):
     query_vec = get_embedding(query)
 
-    # Build filter
     filter_dict = {"user_id": {"$eq": user_id}}
 
     # Add memory type filter if specified
@@ -470,7 +452,7 @@ def get_conversation_history(user_id, limit=5):
     # Query the most recent interactions for this user
     res = index.query(
         vector=[0] * 768,  # Dummy vector, we're just using filters (Gemini dimension)
-        top_k=limit * 2,  # Get more than needed to filter
+        top_k=limit * 2,  # Getting more than needed to filter
         include_metadata=True,
         filter={
             "user_id": {"$eq": user_id},
@@ -800,7 +782,6 @@ def process_message(user_id, message):
     date_entities = analysis.get("date_entities", [])
     time_entities = analysis.get("time_entities", [])
 
-    # Handle "who am I" or similar identity queries
     if message.lower().strip() in ["who am i", "who am i?", "tell me about myself"]:
         preferences = get_user_preferences(user_id)
         semantic_memories = recall_semantic_memory(user_id, "user identity", top_k=1)
@@ -1552,12 +1533,13 @@ def handle_booking_query_with_agno(user_id, message, query_type="all", customer_
               ORDER BY b."Booking Date", b."Time Slot (HH:MM)"
               
             Your response should include:
-            1. The executed SQL query.
-            2. A summary of the bookings retrieved:
-               - Listing each booking with Service Name, Booking Date, Time Slot (HH:MM), and Price (INR).
-            3. If the query is for future bookings, include a reminder about the cancellation policy.
-            4. If the query is for previous bookings, ask if the user would like to rebook the same service.
-            5. DO NOT USE EXACT NAMES OF COLUMNS GIVE GENERIC NAMES LIKE TIME : AND PRICE OR RATE :
+            1. A summary of the bookings retrieved in a numbered list format like this:
+                1. Service: **[Service Name]**, Date: **[Booking Date]**, Time: [Time Slot], Price: [Price]
+                2. Service: **[Service Name]**, Date: **[Booking Date]**, Time: [Time Slot], Price: [Price]
+               (and so on for each booking) CONVERT MONTH NUMBER TO NAME BEFORE DISPLAYING (May 1st, 2025)
+            2. If the query is for future bookings, include a reminder about the cancellation policy.
+            3. If the query is for previous bookings, ask if the user would like to rebook the same service.
+            4. DO NOT USE EXACT NAMES OF COLUMNS GIVE GENERIC NAMES LIKE TIME : AND PRICE OR RATE :
         """)
 
         # Create the agent with a key rotation mechanism
@@ -3170,7 +3152,7 @@ def chat():
         try:
             message = input("You: ")
         except KeyboardInterrupt:
-            print("\nTransquility Spa Assistant: Thank you for chatting with us. Have a relaxing day!")
+            print("\nRed Trends Spa Assistant: Thank you for chatting with us. Have a relaxing day!")
             break
 
         if message.lower() in ["exit", "quit", "bye"]:
@@ -3403,7 +3385,7 @@ def handle_general_query_with_agno(user_id, message):
                                         
                             formatted_results += "### END OF SEARCH RESULTS ###\n\n"
 
-                        # Send the search results back to the agent for processing
+                        # Send the saerch results back to the agent for processing
                         context_info = ""
                         if previous_message:
                             context_info = f"The user's previous message was: '{previous_message}'. "
