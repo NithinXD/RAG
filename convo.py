@@ -212,6 +212,20 @@ def answer_with_smart_context(user_id, message, custom_instructions=None, additi
         tools = [sql_tools]
         if additional_tools:
             tools.extend(additional_tools)
+            
+        # Add web search capability if Serper API key is available
+        web_search_instructions = ""
+        if serper_api_key:
+            web_search_instructions = dedent("""
+                HANDLING MISSING INFORMATION:
+                1. If information is not found in the database, EXPLICITLY state "I need to search for: [search query]" 
+                2. Alternatively, you can indicate that information is not in the database by saying phrases like:
+                   - "I don't have specific information about that in our database"
+                   - "That information is not available in our database"
+                   - "I couldn't find information about that in our system"
+                3. When you use these phrases, I will automatically search the web for the information
+                4. DO NOT make up information if it's not in the database - either request a search or indicate the information is missing
+            """)
         
         # Create default context-dependent query instructions if not provided
         # Add special instructions for after/before queries
@@ -258,6 +272,8 @@ def answer_with_smart_context(user_id, message, custom_instructions=None, additi
             4. For service-related questions, query the services table
             5. For booking-related questions, direct the user to make a booking
             6. Be conversational and maintain continuity with previous interactions
+            
+            {web_search_instructions}
             
             CONTEXT HANDLING GUIDELINES:
             1. For short messages like "can i do it after detan" or "what about this one", you MUST explicitly identify what "it" or "this one" refers to
@@ -334,6 +350,29 @@ def answer_with_smart_context(user_id, message, custom_instructions=None, additi
                - Format: "I understand that by 'it' you're referring to [specific service/topic]..."
                - If you cannot determine what the pronoun refers to, ask the user to clarify
                - NEVER proceed with your response without first resolving pronoun references
+            9. When listing all services or multiple services, format them in a clean markdown format:
+               - Use underline for categories (with markdown __underline__)
+               - Use bold for service names and ### for categories
+               - Use regular text for price and description
+               - Example:
+                 ```
+                 ### __Massage Therapy__
+                 
+                 **Deep Tissue Massage**
+                 Price: INR 2500
+                 Description: A therapeutic massage targeting deeper muscle layers
+                 
+                 **Aromatherapy Massage**
+                 Price: INR 2200
+                 Description: Relaxing massage with essential oils
+                 
+                 **Facial Treatments**
+                 ---
+                 
+                 **Glowing Facial**
+                 Price: INR 1800
+                 Description: A customized treatment for radiant skin
+                 ```
             
             MOST RELEVANT CONVERSATION HISTORY:
             {context_history}
@@ -433,11 +472,114 @@ def answer_with_smart_context(user_id, message, custom_instructions=None, additi
                 
                 # Try to get a response
                 response = context_agent.run(context_prompt)
+                agent_response = response.content
+                
+                # Check if the agent wants to search the web
+                # Look for both explicit search requests and implicit indicators that info is not in DB
+                search_needed = False
+                search_query = None
+                
+                # Check for explicit search request
+                if serper_api_key and "I need to search for:" in agent_response:
+                    # Extract the search query
+                    search_query_match = re.search(r'I need to search for:\s*(.+?)(?:\n|$)', agent_response)
+                    if search_query_match:
+                        search_query = search_query_match.group(1).strip()
+                        search_needed = True
+                
+                # Check for implicit indicators that info is not in DB
+                if serper_api_key and not search_needed:
+                    no_info_indicators = [
+                        "don't have information",
+                        "don't have specific information", 
+                        "no information available",
+                        "not available in our database",
+                        "not found in our database",
+                        "not in our database",
+                        "no data available",
+                        "I don't have details",
+                        "couldn't find information",
+                        "no specific information",
+                        "not in our system"
+                    ]
+                    
+                    if any(indicator in agent_response.lower() for indicator in no_info_indicators):
+                        logger.info(f"Detected implicit need for web search in context-dependent query: info not in database")
+                        # Create a search query based on the user's message and context
+                        search_query = message
+                        search_needed = True
+                
+                if search_needed and search_query:
+                    # Get the most recent conversation for context
+                    most_recent_msg = ""
+                    if history_items:
+                        most_recent = history_items[0]
+                        most_recent_msg = most_recent.get('metadata', {}).get('message', '')
+                    
+                    # Enhance search query with previous message context if available
+                    enhanced_query = search_query
+                    if most_recent_msg:
+                        # Combine current and previous messages for context-aware search
+                        combined_context = f"{most_recent_msg} {message}"
+                        # Use the original search query but enhance it with context
+                        enhanced_query = f"{search_query} {combined_context}"
+                        # Limit query length to avoid issues with search API
+                        if len(enhanced_query) > 300:
+                            enhanced_query = enhanced_query[:300]
+                        
+                        logger.info(f"Enhanced search query with conversation context")
+                    
+                    logger.info(f"Performing web search for context-dependent query: {enhanced_query}")
+                    
+                    # Import the search function from serper.py
+                    from serper import search_web
+                    
+                    # Perform the search with the enhanced query
+                    search_results_text = search_web(enhanced_query, num_results=3)
+                    
+                    # Format the search results
+                    formatted_results = "### WEB SEARCH RESULTS ###\n\n"
+                    
+                    if not search_results_text:
+                        formatted_results += "No relevant search results found."
+                    else:
+                        formatted_results += search_results_text
+                        
+                    formatted_results += "\n\n### END OF SEARCH RESULTS ###\n\n"
+                    
+                    # Send the search results back to the agent for processing
+                    context_info = ""
+                    if most_recent_msg:
+                        context_info = f"The user's previous message was: '{most_recent_msg}'. "
+                    
+                    follow_up_prompt = f"""
+Based on the user's question: '{message}', {context_info}I performed a web search and found the following information:
+
+{formatted_results}
+
+IMPORTANT INSTRUCTIONS:
+1. You MUST use the web search results above to answer the user's question. 
+2. Do not claim you cannot access the search results or external websites.
+3. If the search results contain relevant information, summarize it and provide a complete answer.
+4. DO NOT mention that you searched the web or that the information comes from a web search.
+5. Present the information as if it's your own knowledge.
+6. If the search results don't directly answer the question, provide the best information you can based on what was found.
+7. Focus on spa and wellness-related information that is most relevant to the user's question.
+8. If the search results contain conflicting information, use your judgment to provide the most accurate answer.
+9. If the user asked about compatibility of treatments (e.g., "can I do X after Y?"), provide specific advice based on the search results.
+10. REMEMBER: If the user's question contains pronouns like "it", "this", or "that", you MUST explicitly identify what they refer to based on the conversation history.
+
+Please provide a helpful, complete response that directly addresses the user's question.
+"""
+                    
+                    # Get the final response with the search results
+                    follow_up_response = context_agent.run(follow_up_prompt)
+                    agent_response = follow_up_response.content
                 
                 # Store the interaction in memory
-                store_memory(user_id, message, response.content, MEMORY_TYPES["INTERACTION"])
+                store_memory(user_id, message, agent_response, MEMORY_TYPES["INTERACTION"])
                 
-                return response.content
+                return agent_response
             except Exception as e:
                 logger.error(f"Error getting response from context agent (attempt {retry+1}): {str(e)}")
                 if retry < max_retries - 1:
@@ -524,6 +666,38 @@ def handle_general_query_with_agno(user_id, message):
             2. For general spa questions, provide helpful information based on the database or web search
             3. Always be professional, friendly, and concise
             4. If suggesting a service, mention how the user can book it
+            5. When listing all services or multiple services, format them in a clean markdown format:
+               - Use underline for categories (with markdown __underline__)
+               - Use bold for service names
+               - Use regular text for price and description
+               - Example:
+                 ```
+                 __Massage Therapy__
+                 
+                 **Deep Tissue Massage**
+                 Price: INR 2500
+                 Description: A therapeutic massage targeting deeper muscle layers
+                 
+                 **Aromatherapy Massage**
+                 Price: INR 2200
+                 Description: Relaxing massage with essential oils
+                 
+                 **Facial Treatments**
+                 ---
+                 
+                 **Glowing Facial**
+                 Price: INR 1800
+                 Description: A customized treatment for radiant skin
+                 ```
+
+            HANDLING MISSING INFORMATION:
+            1. If information is not found in the database, EXPLICITLY state "I need to search for: [search query]" 
+            2. Alternatively, you can indicate that information is not in the database by saying phrases like:
+               - "I don't have specific information about that in our database"
+               - "That information is not available in our database"
+               - "I couldn't find information about that in our system"
+            3. When you use these phrases, I will automatically search the web for the information
+            4. DO NOT make up information if it's not in the database - either request a search or indicate the information is missing
 
             IMPORTANT: Only search the web if the question is related to spa services, wellness, or beauty treatments AND cannot be answered from the database.
         """)
@@ -603,8 +777,12 @@ def handle_general_query_with_agno(user_id, message):
         general_query_prompt += "First check our database for relevant information about our services. "
 
         if serper_api_key:
-            general_query_prompt += "If the database doesn't have the answer and the question is related to spa services, wellness, or beauty treatments, indicate that you need to search the web by saying 'I need to search for: [your search query]'. "
+            general_query_prompt += "If the database doesn't have the answer and the question is related to spa services, wellness, or beauty treatments, you have two options: "
+            general_query_prompt += "1. Explicitly indicate that you need to search the web by saying 'I need to search for: [your search query]' OR "
+            general_query_prompt += "2. Use phrases like 'I don't have specific information about that in our database' or 'That information is not available in our system' "
+            general_query_prompt += "When you use either approach, I will automatically search the web for the information. "
             general_query_prompt += "When I provide web search results, you MUST use them to answer the question. Never claim you cannot access search results or external websites. "
+            general_query_prompt += "DO NOT make up information if it's not in the database - either request a search or indicate the information is missing. "
 
         general_query_prompt += "Provide a helpful, accurate response based on all available information."
 
@@ -623,77 +801,113 @@ def handle_general_query_with_agno(user_id, message):
                 agent_response = response.content
 
                 # Check if the agent wants to search the web
+                # Look for both explicit search requests and implicit indicators that info is not in DB
+                search_needed = False
+                search_query = None
+                
+                # Check for explicit search request
                 if serper_api_key and "I need to search for:" in agent_response:
                     # Extract the search query
                     search_query_match = re.search(r'I need to search for:\s*(.+?)(?:\n|$)', agent_response)
                     if search_query_match:
                         search_query = search_query_match.group(1).strip()
+                        search_needed = True
+                
+                # Check for implicit indicators that info is not in DB
+                if serper_api_key and not search_needed:
+                    no_info_indicators = [
+                        "don't have information",
+                        "don't have specific information", 
+                        "no information available",
+                        "not available in our database",
+                        "not found in our database",
+                        "not in our database",
+                        "no data available",
+                        "I don't have details",
+                        "couldn't find information",
+                        "no specific information",
+                        "not in our system"
+                    ]
+                    
+                    if any(indicator in agent_response.lower() for indicator in no_info_indicators):
+                        logger.info(f"Detected implicit need for web search: info not in database")
+                        # Create a search query based on the user's message
+                        search_query = message
+                        search_needed = True
+                
+                if search_needed and search_query:
+                    # Enhance search query with previous message context if available
+                    enhanced_query = search_query
+                    if previous_message:
+                        # Combine current and previous messages for context-aware search
+                        # Extract key terms from both messages to create a more focused query
+                        combined_context = f"{previous_message} {message}"
+                        # Use the original search query but enhance it with context
+                        enhanced_query = f"{search_query} {combined_context}"
+                        # Limit query length to avoid issues with search API
+                        if len(enhanced_query) > 300:
+                            enhanced_query = enhanced_query[:300]
                         
-                        # Enhance search query with previous message context if available
-                        enhanced_query = search_query
-                        if previous_message:
-                            # Combine current and previous messages for context-aware search
-                            # Extract key terms from both messages to create a more focused query
-                            combined_context = f"{previous_message} {message}"
-                            # Use the original search query but enhance it with context
-                            enhanced_query = f"{search_query} {combined_context}"
-                            # Limit query length to avoid issues with search API
-                            if len(enhanced_query) > 300:
-                                enhanced_query = enhanced_query[:300]
-                            
-                            logger.info(f"Enhanced search query with previous message context")
-                        
-                        logger.info(f"Performing web search for: {enhanced_query}")
+                        logger.info(f"Enhanced search query with previous message context")
+                    
+                    logger.info(f"Performing web search for: {enhanced_query}")
 
-                        # Perform the search with the enhanced query
-                        search_results = search_with_serper(enhanced_query)
+                    # Perform the search with the enhanced query
+                    search_results = search_with_serper(enhanced_query)
 
-                        # Format the search results
-                        formatted_results = "### WEB SEARCH RESULTS ###\n\n"
+                    # Format the search results
+                    formatted_results = "### WEB SEARCH RESULTS ###\n\n"
 
-                        if "error" in search_results:
-                            formatted_results += f"Error performing search: {search_results['error']}"
-                        else:
-                            # Add organic results
-                            if "organic" in search_results:
-                                formatted_results += "ORGANIC SEARCH RESULTS:\n"
-                                for i, result in enumerate(search_results["organic"][:3], 1):
-                                    title = result.get("title", "No title")
-                                    link = result.get("link", "No link")
-                                    snippet = result.get("snippet", "No description")
-                                    formatted_results += f"RESULT {i}:\nTitle: {title}\nContent: {snippet}\nSource: {link}\n\n"
+                    if "error" in search_results:
+                        formatted_results += f"Error performing search: {search_results['error']}"
+                    else:
+                        # Add organic results
+                        if "organic" in search_results:
+                            formatted_results += "ORGANIC SEARCH RESULTS:\n"
+                            for i, result in enumerate(search_results["organic"][:3], 1):
+                                title = result.get("title", "No title")
+                                link = result.get("link", "No link")
+                                snippet = result.get("snippet", "No description")
+                                formatted_results += f"RESULT {i}:\nTitle: {title}\nContent: {snippet}\nSource: {link}\n\n"
 
-                            # Add knowledge graph if available
-                            if "knowledgeGraph" in search_results:
-                                kg = search_results["knowledgeGraph"]
-                                if "title" in kg:
-                                    formatted_results += "KNOWLEDGE GRAPH INFORMATION:\n"
-                                    formatted_results += f"Title: {kg.get('title')}\n"
-                                    if "description" in kg:
-                                        formatted_results += f"Description: {kg.get('description')}\n\n"
-                                        
-                            formatted_results += "### END OF SEARCH RESULTS ###\n\n"
+                        # Add knowledge graph if available
+                        if "knowledgeGraph" in search_results:
+                            kg = search_results["knowledgeGraph"]
+                            if "title" in kg:
+                                formatted_results += "KNOWLEDGE GRAPH INFORMATION:\n"
+                                formatted_results += f"Title: {kg.get('title')}\n"
+                                if "description" in kg:
+                                    formatted_results += f"Description: {kg.get('description')}\n\n"
+                                    
+                    formatted_results += "### END OF SEARCH RESULTS ###\n\n"
 
-                        # Send the saerch results back to the agent for processing
-                        context_info = ""
-                        if previous_message:
-                            context_info = f"The user's previous message was: '{previous_message}'. "
-                        
-                        follow_up_prompt = f"""
+                    # Send the search results back to the agent for processing
+                    context_info = ""
+                    if previous_message:
+                        context_info = f"The user's previous message was: '{previous_message}'. "
+                    
+                    follow_up_prompt = f"""
 Based on the user's question: '{message}', {context_info}I performed a web search for '{enhanced_query}' and found the following information:
 
 {formatted_results}
 
-IMPORTANT: You MUST use the web search results above to answer the user's question. Do not claim you cannot access the search results or external websites.
-If the search results contain relevant information, summarize it and cite the sources.
-If the search results don't directly answer the question, say so and provide the best information you can based on what was found.
+IMPORTANT INSTRUCTIONS:
+1. You MUST use the web search results above to answer the user's question. 
+2. Do not claim you cannot access the search results or external websites.
+3. If the search results contain relevant information, summarize it and provide a complete answer.
+4. DO NOT mention that you searched the web or that the information comes from a web search.
+5. Present the information as if it's your own knowledge.
+6. If the search results don't directly answer the question, provide the best information you can based on what was found.
+7. Focus on spa and wellness-related information that is most relevant to the user's question.
+8. If the search results contain conflicting information, use your judgment to provide the most accurate answer.
+9. If the user asked about compatibility of treatments (e.g., "can I do X after Y?"), provide specific advice based on the search results.
 
-Please provide a helpful response focusing on spa and wellness-related information.
+Please provide a helpful, complete response that directly addresses the user's question.
 """
 
-                        # Get the final response with the search results
-                        follow_up_response = general_query_agent.run(follow_up_prompt)
-                        agent_response = follow_up_response.content
+                    # Get the final response with the search results
+                    follow_up_response = general_query_agent.run(follow_up_prompt)
+                    agent_response = follow_up_response.content
 
                 # Make sure we have a valid response
                 if agent_response is None:
